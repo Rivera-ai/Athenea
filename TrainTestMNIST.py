@@ -3,74 +3,166 @@
 import torch
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
+from torch.cuda.amp import autocast, GradScaler
+import torchvision.utils as vutils
+from pathlib import Path
+import os
 from Athenea.transfusion import Transfusion, CosineDecayWithWarmup
 from Athenea.configs import MNIST_config
 from Athenea.llm import Transformer, transfusion_config_to_model_args
 from Athenea.diffusion_utils import DiffusionUtils
 
-def train_epoch(model, train_loader, optimizer, scheduler, diff_utils, config, device):
+
+def save_samples(model, images, diff_utils, device, epoch, batch_idx, sample_dir='samples'):
+    """Guarda muestras originales, con ruido y reconstruidas"""
+    model.eval()
+    with torch.no_grad():
+        # Crear directorio si no existe
+        Path(sample_dir).mkdir(parents=True, exist_ok=True)
+        
+        # Seleccionar una imagen de muestra
+        image = images[0].unsqueeze(0)  # Tomar primera imagen de la batch
+        
+        # Añadir ruido
+        t = torch.tensor([diff_utils.num_timesteps-1], device=device)
+        noisy_image, _ = diff_utils.noisy_it(image[0], t)
+        
+        # Generar secuencia de denoising
+        denoised_image = noisy_image.clone()
+        sequence = [image[0], noisy_image]
+        
+        # Proceso de denoising
+        for i in range(diff_utils.num_timesteps-1, -1, -diff_utils.num_timesteps//10):
+            t_i = torch.tensor([i], device=device)
+            patches = model.patch_ops.patchify(denoised_image)
+            
+            with autocast(dtype=torch.float16):
+                modality_token_emb = model.forward_unbatched(
+                    [torch.tensor([0], device=device), (patches, t_i), torch.tensor([model.BOI, model.EOI], device=device)],
+                    ["text", "image", "text"]
+                )
+            
+            pred_noise = model.patch_ops.unpatchify(modality_token_emb[1].squeeze(0))
+            denoised_image = diff_utils.one_step_ddpm(denoised_image.unsqueeze(0), pred_noise.unsqueeze(0), t_i)[0]
+            
+            if i % (diff_utils.num_timesteps//10) == 0:
+                sequence.append(denoised_image)
+        
+        # Guardar grid de imágenes
+        sequence = torch.stack(sequence)
+        grid = vutils.make_grid(sequence, nrow=4, normalize=True)
+        save_path = f"{sample_dir}/epoch_{epoch}_batch_{batch_idx}.png"
+        vutils.save_image(grid, save_path)
+        
+        print(f"\nGuardada secuencia de imágenes en {save_path}")
+        print("Secuencia: Original -> Ruido -> Pasos de denoising")
+        
+        # Visualizar en terminal (ASCII art simple)
+        img_ascii = sequence.mean(dim=1).cpu().numpy()  # Convertir a escala de grises
+        for idx, img in enumerate(img_ascii):
+            print(f"\nImagen {idx}:")
+            for row in img[::2]:  # Mostrar cada segunda fila para compactar
+                print(''.join(['#' if pixel > 0 else ' ' for pixel in row[::2]]))
+    
+    model.train()
+
+def prepare_batch_inputs(images, labels, config, device):
+    # Preparar tokens para toda la batch
+    batch_size = images.size(0)
+    
+    # Convertir etiquetas a tokens iniciales
+    input_tokens = []
+    modality_strings = []
+    
+    for i in range(batch_size):
+        # Secuencia: [label, BOI, image, EOI]
+        text_start = labels[i].unsqueeze(0)  # [1]
+        text_end = torch.tensor([config.BOI, config.EOI], device=device)  # [2]
+        
+        input_tokens.append([
+            text_start,
+            None,  # Placeholder para la imagen
+            text_end
+        ])
+        modality_strings.append(["text", "image", "text"])
+    
+    return input_tokens, modality_strings
+
+def train_epoch(model, train_loader, optimizer, scheduler, scaler, diff_utils, config, device, epoch):
     model.train()
     total_loss = 0
+    step = 0
     
     for batch_idx, (images, labels) in enumerate(train_loader):
         images, labels = images.to(device), labels.to(device)
         batch_size = images.size(0)
-
-        # Prepare text tokens (usando los labels como texto simple para prueba)
-        text_tokens = labels.unsqueeze(-1)  # [B, 1]
-        boi_tokens = torch.full((batch_size, 1), config.BOI.item(), device=device)
-        eoi_tokens = torch.full((batch_size, 1), config.EOI.item(), device=device)
         
-        # Random timesteps para difusión
-        t = torch.randint(0, config.num_timesteps, (batch_size,), device=device)
+        # Preparar inputs para la batch
+        batch_tokens, batch_strings = prepare_batch_inputs(images, labels, config, device)
         
-        # Aplicar ruido a las imágenes
-        noisy_images, noise = diff_utils.noisy_it(images, t)
-
-        # Preparar tokens para Transfusion
-        modality_tokens = [
-            text_tokens,
-            (noisy_images, t),
-            torch.cat([boi_tokens, eoi_tokens], dim=1)
-        ]
-        modality_strings = ["text", "image", "text"]
-
+        # Actualizar learning rate
+        current_lr = scheduler(step)
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = current_lr
+            
         optimizer.zero_grad()
         
-        # Forward pass
-        outputs, _ = model.forward_unbatched(modality_tokens, modality_strings)
+        # Acumular pérdidas para la batch
+        batch_loss = 0
         
-        # Calcular pérdidas
-        # Pérdida de difusión
-        predicted_noise = outputs[1]
-        diff_loss = torch.nn.functional.mse_loss(predicted_noise, noise)
-        
-        # Pérdida de LM (solo en tokens de texto)
-        lm_loss = torch.nn.functional.cross_entropy(
-            outputs[0].view(-1, config.lm_output_units),
-            text_tokens.view(-1)
-        )
-        
-        # Combinar pérdidas
-        loss = lm_loss + config.balancing_coeff * diff_loss
-        
-        loss.backward()
+        for i in range(batch_size):
+            t = torch.randint(0, config.num_timesteps, (1,), device=device)
+            noisy_image, noise = diff_utils.noisy_it(images[i], t)
+            patches = model.patch_ops.patchify(noisy_image)
+            batch_tokens[i][1] = (patches, t)
+            
+            with autocast(dtype=torch.float16):
+                modality_token_emb = model.forward_unbatched(batch_tokens[i], batch_strings[i])
+                predicted_noise = model.patch_ops.unpatchify(modality_token_emb[1].squeeze(0))
+                diff_loss = torch.nn.functional.mse_loss(predicted_noise, noise)
+                
+                text_start_loss = torch.nn.functional.cross_entropy(
+                    modality_token_emb[0].squeeze(0),
+                    batch_tokens[i][0]
+                )
+                
+                text_end_loss = torch.nn.functional.cross_entropy(
+                    modality_token_emb[2].squeeze(0),
+                    batch_tokens[i][2]
+                )
+                
+                loss = text_start_loss + text_end_loss + config.balancing_coeff * diff_loss
+                loss = loss / batch_size
+            
+            scaler.scale(loss).backward()
+            batch_loss += loss.item()
+            
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), config.clipnorm)
-        optimizer.step()
-        scheduler.step()
+        scaler.step(optimizer)
+        scaler.update()
         
-        total_loss += loss.item()
+        total_loss += batch_loss
+        step += 1
         
         if batch_idx % config.log_interval == 0:
-            print(f'Train Batch: {batch_idx} Loss: {loss.item():.6f}')
+            print(f'Epoch: {epoch} [{batch_idx * batch_size}/{len(train_loader.dataset)} '
+                  f'({100. * batch_idx / len(train_loader):.0f}%)]\t'
+                  f'Loss: {batch_loss:.6f}\t'
+                  f'LR: {current_lr:.2e}')
             
-    return total_loss / len(train_loader)
+            # Guardar y mostrar muestras
+            save_samples(model, images, diff_utils, device, epoch, batch_idx)
+    
+    return total_loss / len(train_loader.dataset)
 
 def main():
+    # Configuración
     config = MNIST_config()
     device = config.device
+    print(f"Using device: {device}")
     
-    # Preparar dataset
+    # Dataset y DataLoader
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.1307,), (0.3081,))
@@ -79,15 +171,15 @@ def main():
     dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
     train_loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True)
     
-    # Inicializar modelo
+    # Modelo
     model_args = transfusion_config_to_model_args(config)
     transformer = Transformer(model_args)
     model = Transfusion(transformer, config).to(device)
     
-    # Inicializar utilidades de difusión
+    # Utilidades de difusión
     diff_utils = DiffusionUtils(linear_schedule=True, config=config)
     
-    # Optimizador y scheduler
+    # Optimizador
     optimizer = model.configure_optimizers(
         weight_decay=config.weight_decay,
         learning_rate=config.max_lr,
@@ -95,6 +187,7 @@ def main():
         device_type=device.type
     )
     
+    # Scheduler
     scheduler = CosineDecayWithWarmup(
         warmup_steps=config.warmup_steps,
         max_learning_rate=config.max_lr,
@@ -102,14 +195,26 @@ def main():
         min_learning_rate=config.min_lr
     )
     
+    # Gradient Scaler para mixed precision
+    scaler = GradScaler()
+    
     # Entrenamiento
     print("Starting training...")
-    for epoch in range(5):  # Entrenar por 5 épocas para prueba
+    for epoch in range(config.num_steps):
         avg_loss = train_epoch(
-            model, train_loader, optimizer, scheduler,
-            diff_utils, config, device
+            model=model,
+            train_loader=train_loader,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            scaler=scaler,
+            diff_utils=diff_utils,
+            config=config,
+            device=device,
+            epoch=epoch
         )
-        print(f'Epoch: {epoch} Average Loss: {avg_loss:.6f}')
+        print(f'====> Epoch: {epoch} Average loss: {avg_loss:.4f}')
+        
+        
 
 if __name__ == "__main__":
     main()

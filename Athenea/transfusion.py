@@ -6,8 +6,8 @@ import math
 import torch
 from torch import Tensor, nn, _assert
 
-from diffusion_utils import DiffusionUtils
-from llm import Transformer, transfusion_config_to_model_args
+from .diffusion_utils import DiffusionUtils
+from .llm import Transformer, transfusion_config_to_model_args
 
 
 class TextOps(nn.Module):
@@ -263,6 +263,7 @@ class CosineDecayWithWarmup:
         coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
         return self.min_learning_rate + coeff * (self.max_learning_rate - self.min_learning_rate)
 
+"""
 if __name__ == "__main__":
     # [ (T1,), ( (N1, D), (,) ), (T2,), ( (N1, D), (,) )]
     #                   OR
@@ -365,4 +366,4 @@ if __name__ == "__main__":
 
     # Imprimir parámetros totales del modelo
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"\nTotal de parámetros: {total_params:,}")
+    print(f"\nTotal de parámetros: {total_params:,}") """

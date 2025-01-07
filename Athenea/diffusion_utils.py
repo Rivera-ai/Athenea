@@ -37,8 +37,10 @@ class DiffusionUtils:
     def noisy_it(self, X:Tensor, t:Tensor): # (B, H, W, C), (B,)
         noise = torch.normal(mean=0.0, std=1.0, size=X.shape, device=self.device) # (B,)
 
-        alpha_bar_t = self.alpha_bar[t][:, None, None, None] # (B, 1, 1, 1) <= (B,) <= (nT,)
-        return torch.sqrt(alpha_bar_t)*X + torch.sqrt(1 - alpha_bar_t) * noise, noise # noisy_image, noise
+        alpha_bar_t = self.alpha_bar[t]
+        alpha_bar_t = alpha_bar_t.view(-1, 1, 1)
+        noisy_image = torch.sqrt(alpha_bar_t)*X + torch.sqrt(1 - alpha_bar_t) * noise
+        return noisy_image, noise # noisy_image, noise
     
     def one_step_ddpm(self, xt:Tensor, pred_noise:Tensor, t:Tensor):
         alpha_t, alpha_bar_t = self.alpha[t, None, None, None], self.alpha_bar[t, None, None, None]

@@ -216,7 +216,7 @@ class Transformer(nn.Module):
     def forward(self, h: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         # Obtener dimensiones actuales
         bsz, seqlen = h.size()[:2]
-        print(f"seqlen: {seqlen}")
+        #print(f"seqlen: {seqlen}")
         
         # Aplicar dropout
         h = self.dropout(h)
