@@ -1,3 +1,5 @@
+""" Repo based implementation: https://github.com/VachanVY/Transfusion.torch """
+
 from tqdm import trange
 import typing as tp
 

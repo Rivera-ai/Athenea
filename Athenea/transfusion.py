@@ -1,10 +1,13 @@
+""" Repo based implementation: https://github.com/VachanVY/Transfusion.torch """
+
 import typing as tp
 import math
 
 import torch
 from torch import Tensor, nn, _assert
 
-from src.diffusion_utils import DiffusionUtils
+from diffusion_utils import DiffusionUtils
+from llm import Transformer, transfusion_config_to_model_args
 
 
 class TextOps(nn.Module):
@@ -94,7 +97,7 @@ class PatchOps(nn.Module):
         return self.linear(patches[None] + time_emb)[0] # (B, N, d_model)
 
 
-class Transfussion(nn.Module):
+class Transfusion(nn.Module):
     def __init__(self, model:nn.Module, config:tp.Any):
         super().__init__()
         self.model = model
@@ -264,14 +267,52 @@ if __name__ == "__main__":
     # [ (T1,), ( (N1, D), (,) ), (T2,), ( (N1, D), (,) )]
     #                   OR
     # [ (T3,), ( (N3, D), (,) ), (T4,),                 ]
-    from src.configs import MNIST_config as config
-    from src.llama2c import Transformer as LLaMA
+    from configs import MNIST_config as config
+    from llm import Transformer, ModelArgs  # Tu nueva implementación de LLaMA 3
 
-    model = Transfussion(
-        model=LLaMA(config),
+    # Crear ModelArgs mapeando los parámetros de MNIST_config
+    model_args = ModelArgs(
+        # Parámetros base del transformer
+        dim=config.d_model,  # 348 para MNIST, 512 para FashionMNIST
+        n_layers=config.num_layers,  # 7 para MNIST, 8 para FashionMNIST
+        n_heads=config.num_heads,  # 6 para MNIST, 8 para FashionMNIST
+        n_kv_heads=config.num_heads,  # Mismo número que heads
+        
+        # Vocabulario y dimensiones
+        vocab_size=config.lm_output_units,  # Calculado dinámicamente basado en num_classes y tokens especiales
+        max_seq_len=config.maxlen,  # 2*N + text_maxlen
+        max_batch_size=config.batch_size,  # 64
+        
+        # Regularización
+        dropout=config.dropout_rate,  # 0.0
+        
+        # Parámetros específicos de LLaMA 3 que no están en MNIST_config
+        multiple_of=256,  # Valor por defecto de LLaMA 3
+        ffn_dim_multiplier=None,  # Usar el valor por defecto
+        norm_eps=1e-5,  # Valor estándar
+        rope_theta=500000  # Valor por defecto de LLaMA 3
+    )
+
+    print("=== Configuración del Modelo ===")
+    print(f"Dimension del modelo: {config.d_model}")
+    print(f"Número de capas: {config.num_layers}")
+    print(f"Número de heads: {config.num_heads}")
+    print(f"Vocabulario: {config.lm_output_units}")
+    print(f"Longitud máxima de secuencia: {config.maxlen}")
+
+    # Imprimir estructura del ModelArgs
+    print("\n=== Argumentos del Modelo ===")
+    print(model_args)
+    # Crear el modelo Transfusion
+    model = Transfusion(
+        model=Transformer(model_args),
         config=config
     )
 
+    print("\n=== Estructura del Modelo ===")
+    print(model)
+
+    # Mostrar forma de los datos de entrada
     text_and_images = [
         [
             torch.randint(0, 10, (39,)), 
@@ -286,4 +327,42 @@ if __name__ == "__main__":
             torch.randint(0, 10, (9,))
         ]
     ]
-    _ = model(text_and_images, [["text", "image", "text"], ["text", "image", "text", "image", "text"]])
+
+    print("\n=== Datos de Entrada ===")
+    print("Secuencia 1:")
+    print(f"Texto 1 shape: {text_and_images[0][0].shape}")
+    print(f"Imagen 1 shape: {text_and_images[0][1][0].shape}")
+    print(f"Texto 2 shape: {text_and_images[0][2].shape}")
+    
+    print("\nSecuencia 2:")
+    print(f"Texto 1 shape: {text_and_images[1][0].shape}")
+    print(f"Imagen 1 shape: {text_and_images[1][1][0].shape}")
+    print(f"Texto 2 shape: {text_and_images[1][2].shape}")
+    print(f"Imagen 2 shape: {text_and_images[1][3][0].shape}")
+    print(f"Texto 3 shape: {text_and_images[1][4].shape}")
+
+    # Intentar el forward pass y capturar cualquier error
+    try:
+        outputs = model(text_and_images, [["text", "image", "text"], ["text", "image", "text", "image", "text"]])
+        print("\n=== Forward Pass Exitoso ===")
+        print("Formas de salida:")
+        if isinstance(outputs, tuple):
+            modality_token_emb, modality_strings = outputs
+            print("Modality Token Embeddings:")
+            for i, emb in enumerate(modality_token_emb):
+                print(f"Secuencia {i+1}:")
+                for j, token_emb in enumerate(emb):
+                    print(f"  Token {j+1} shape: {token_emb.shape}")
+            print("\nModality Strings:")
+            for i, strings in enumerate(modality_strings):
+                print(f"Secuencia {i+1}: {strings}")
+        else:
+            print(f"Output type: {type(outputs)}")
+            print(f"Output structure: {outputs}")
+    except Exception as e:
+        print("\n=== Error en Forward Pass ===")
+        print(f"Error: {str(e)}")
+
+    # Imprimir parámetros totales del modelo
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"\nTotal de parámetros: {total_params:,}")
