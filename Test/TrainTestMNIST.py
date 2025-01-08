@@ -7,10 +7,7 @@ from torch.cuda.amp import autocast, GradScaler
 import torchvision.utils as vutils
 from pathlib import Path
 import os
-from Athenea.transfusion import Transfusion, CosineDecayWithWarmup
-from Athenea.configs import MNIST_config
-from Athenea.llm import Transformer, transfusion_config_to_model_args
-from Athenea.diffusion_utils import DiffusionUtils
+from Athenea import Transfusion, CosineDecayWithWarmup, MNIST_config, Transformer, transfusion_config_to_model_args, DiffusionUtils
 
 
 def save_samples(model, images, diff_utils, device, epoch, batch_idx, sample_dir='samples'):
