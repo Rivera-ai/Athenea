@@ -9,4 +9,12 @@ This is still being worked on, there may be major improvements in the coming day
 pip install Athenea
 ```
 
+To use the latest versions you must install from the repo:
+
+```bash
+git clone https://github.com/Rivera-ai/Athenea.git
+cd Athenea
+pip install .
+```
+
 And a basic test from Colab: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1DldYfDLyfdZg74H2LAqd2CsJft3hmDCH?usp=sharing)

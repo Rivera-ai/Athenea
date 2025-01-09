@@ -148,16 +148,26 @@ def transfusion_loss(original, reconstruction, noise, predicted_noise, embedding
     # Pérdida de reconstrucción
     recon_loss = F.mse_loss(reconstruction, original)
     
-    # Pérdida de diffusion
-    noise_loss = F.mse_loss(predicted_noise, noise)
+    # Pérdida de diffusion (solo si hay predicción de ruido)
+    noise_loss = 0.0
+    if predicted_noise is not None:
+        noise_loss = F.mse_loss(predicted_noise, noise)
     
     # Pérdida de regularización de embeddings (opcional)
     embedding_loss = torch.mean(torch.abs(embeddings)) * 0.01
     
     return recon_loss * lambda_recon + noise_loss + embedding_loss
 
+class DummyConfig:
+    def __init__(self):
+        self.in_channels = 3
+        self.d_model = 256
+        self.patch_size = 16
+        self.H = 256
+        self.W = 256
+
 # Ejemplo de uso:
-if __name__ == "__main__":
+""" if __name__ == "__main__":
     class DummyConfig:
         def __init__(self):
             self.in_channels = 3
@@ -188,7 +198,7 @@ if __name__ == "__main__":
     x = processor.encoder.normalize(x)
     print(f"Después de normalize: {x.shape}")
 
-    """ Ejecución: 
+     Ejecución: 
 
         ⚡ main ~/Athenea/Athenea python encoders.py
         Embeddings shape: torch.Size([4, 256, 256])
