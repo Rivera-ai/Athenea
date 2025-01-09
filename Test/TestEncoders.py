@@ -151,7 +151,7 @@ if __name__ == "__main__":
     train(
         model=model,
         train_loader=train_loader,
-        num_epochs=100,
+        num_epochs=10,
         device=device,
         save_every=5,
         output_dir='outputs/transfusion_flickr'

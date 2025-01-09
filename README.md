@@ -18,3 +18,7 @@ pip install .
 ```
 
 And a basic test from Colab: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1DldYfDLyfdZg74H2LAqd2CsJft3hmDCH?usp=sharing)
+
+One of the results obtained when training the autoencoders:
+
+![](Images/samples_epoch_10.png)
