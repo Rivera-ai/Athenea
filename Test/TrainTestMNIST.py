@@ -7,6 +7,7 @@ import torchvision.utils as vutils
 from pathlib import Path
 import os
 from Athenea import Transfusion, CosineDecayWithWarmup, MNIST_config, Transformer, transfusion_config_to_model_args, DiffusionUtils
+from tqdm import tqdm
 
 def save_samples(model, images, diff_utils, device, epoch, batch_idx, sample_dir='samples'):
     """Guarda muestras originales, con ruido y reconstruidas"""
@@ -78,11 +79,16 @@ def prepare_batch_inputs(images, labels, config, device):
 def train_steps(model, train_loader, optimizer, scheduler, diff_utils, config, device, total_steps):
     model.train()
     step = 0
-    running_loss = 0
-    log_interval = 100  # Ajusta esto según necesites
+    running_loss = 0.0
+    log_interval = 100
+    
+    # Crear la barra de progreso principal
+    pbar = tqdm(total=total_steps, desc='Training', position=0)
+    
+    # Variables para mostrar métricas en la descripción
+    current_lr = config.max_lr
     
     while step < total_steps:
-        # Reiniciar el DataLoader cuando se agote
         for images, labels in train_loader:
             if step >= total_steps:
                 break
@@ -90,16 +96,15 @@ def train_steps(model, train_loader, optimizer, scheduler, diff_utils, config, d
             images, labels = images.to(device), labels.to(device)
             batch_size = images.size(0)
             
-            # Preparar inputs para la batch
             batch_tokens, batch_strings = prepare_batch_inputs(images, labels, config, device)
             
-            # Actualizar learning rate
+            # Actualizar learning rate usando el scheduler
             current_lr = scheduler(step)
             for param_group in optimizer.param_groups:
                 param_group['lr'] = current_lr
                 
             optimizer.zero_grad()
-            batch_loss = 0
+            batch_loss = 0.0
             
             for i in range(batch_size):
                 t = torch.randint(0, config.num_timesteps, (1,), device=device)
@@ -125,25 +130,34 @@ def train_steps(model, train_loader, optimizer, scheduler, diff_utils, config, d
                 loss = loss / batch_size
                 
                 loss.backward()
-                batch_loss += loss.item()
+                batch_loss += loss.item()  # Usar .item() para obtener el valor escalar
             
-            # Clip gradients
+            # Clip gradients y paso de optimización
             torch.nn.utils.clip_grad_norm_(model.parameters(), config.clipnorm)
             optimizer.step()
             
+            # Actualizar running_loss con el batch actual
             running_loss += batch_loss
             
-            if step % log_interval == 0:
-                avg_loss = running_loss / log_interval if step > 0 else running_loss
-                print(f'Step: {step}/{total_steps} '
-                      f'Loss: {avg_loss:.6f} '
-                      f'LR: {current_lr:.2e}')
-                running_loss = 0
+            if step % log_interval == 0 and step > 0:  # Asegurarse de que no sea el paso 0
+                # Calcular el promedio del loss
+                avg_loss = running_loss / log_interval
                 
-                # Guardar y mostrar muestras
-                save_samples(model, images, diff_utils, device, step, batch_idx=None)
+                # Actualizar la descripción con el loss promedio
+                pbar.set_description(
+                    f'Loss: {avg_loss:.4f} | LR: {current_lr:.2e}'
+                )
+                
+                # Reiniciar running_loss después de actualizar la descripción
+                running_loss = 0.0
+                
+                # Guardar muestras
+                save_samples(model, images, diff_utils, device, step, batch_idx=step)
             
+            pbar.update(1)
             step += 1
+    
+    pbar.close()
 
 def main():
     # Configuración
@@ -163,7 +177,7 @@ def main():
     dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
     train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     
-    # Modelo y resto de la configuración igual que antes...
+    
     model_args = transfusion_config_to_model_args(config)
     transformer = Transformer(model_args)
     model = Transfusion(transformer, config).to(device)
