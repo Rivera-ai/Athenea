@@ -1,3 +1,5 @@
+""" This is a first test to train with Flickr. I'm going to make a file that combines training with Flickr and OpenWebText for a model capable of generating images and text, only text, and perhaps explore the option of a video and text model, and only text in one. """
+
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
