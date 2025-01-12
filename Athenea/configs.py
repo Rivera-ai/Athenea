@@ -123,10 +123,10 @@ class Flickr30kConfig:
     # Training Args
     batch_size: int = 32
     num_steps: int = 500_000  # Más pasos para dataset más grande
-    decay_steps: int = num_steps
+    decay_steps: int = 100_000
     warmup_steps: int = 2000  # Más warmup para estabilidad
     max_lr: float = 1e-4  # Learning rate más bajo para estabilidad
-    min_lr: float = 0.0
+    min_lr: float = 1e-5
     no_decay: bool = False
     beta1: float = 0.9
     beta2: float = 0.95  # Valor del paper
