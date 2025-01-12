@@ -1,6 +1,6 @@
 [project]
 name = "Athenea"
-version = "0.1.5"
+version = "0.1.8"
 description = "Athenea: Implementation of Transfusion based on Llama 3 architecture"
 authors = [
     { name = "Rivera.ai/Fredy Rivera", email = "riveraaai200678@gmail.com" }
